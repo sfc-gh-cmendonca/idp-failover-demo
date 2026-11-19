@@ -1,0 +1,59 @@
+-- Switch PRODUCT_PAYLOAD to a CDC (upsert) interactive table.
+-- Prerequisite: Interactive CDC private preview enabled on the account. Today EU_DEMO59
+-- rejects VERSION BY with a syntax error, which means it is not enabled yet.
+--
+-- The harness needs no change: every message is already a full-row snapshot with
+-- PRODUCT_ID (key) and a per-product, monotonically increasing PRODUCT_VERSION.
+-- Stop the harness first; CREATE OR REPLACE drops existing rows and grants.
+USE ROLE ACCOUNTADMIN;
+
+CREATE OR REPLACE INTERACTIVE TABLE IDP_DEMO.STREAMING.PRODUCT_PAYLOAD (
+  PRODUCT_ID          VARCHAR(20),
+  PRODUCT_VERSION     NUMBER(18,0),
+  EVENT_TYPE          VARCHAR(10),
+  EVENT_TS            TIMESTAMP_NTZ(6),
+  SOURCE_SYSTEM       VARCHAR(30),
+  ISIN                VARCHAR(12),
+  CUSIP               VARCHAR(9),
+  SEDOL               VARCHAR(7),
+  FIGI                VARCHAR(12),
+  TICKER              VARCHAR(20),
+  MIC                 VARCHAR(4),
+  PRODUCT_NAME        VARCHAR(200),
+  ASSET_CLASS         VARCHAR(20),
+  ASSET_SUBCLASS      VARCHAR(40),
+  CFI_CODE            VARCHAR(6),
+  ISSUER_NAME         VARCHAR(200),
+  ISSUER_LEI          VARCHAR(20),
+  COUNTRY_OF_ISSUE    VARCHAR(2),
+  CURRENCY            VARCHAR(3),
+  COUPON_RATE         NUMBER(9,6),
+  ISSUE_DATE          DATE,
+  MATURITY_DATE       DATE,
+  PRICE               NUMBER(18,6),
+  PRICE_TS            TIMESTAMP_NTZ(6),
+  PLACE_OF_SETTLEMENT VARCHAR(20),
+  SETTLEMENT_CYCLE    VARCHAR(5),
+  CA_PENDING          BOOLEAN,
+  CA_EVENT_TYPE       VARCHAR(20),
+  STATUS              VARCHAR(12),
+  PAYLOAD             VARIANT,
+  CONSTRAINT PK_PRODUCT PRIMARY KEY (PRODUCT_ID) INITIALLY DEFERRED
+)
+VERSION BY PRODUCT_VERSION
+CLUSTER BY (PRODUCT_ID);
+
+-- Recreate the named pipe against the new table and reapply grants
+CREATE OR REPLACE PIPE IDP_DEMO.STREAMING.PRODUCT_PAYLOAD_PIPE
+  AS COPY INTO IDP_DEMO.STREAMING.PRODUCT_PAYLOAD
+  FROM TABLE(DATA_SOURCE(TYPE => 'STREAMING'))
+  MATCH_BY_COLUMN_NAME = CASE_INSENSITIVE;
+
+GRANT INSERT, SELECT ON TABLE IDP_DEMO.STREAMING.PRODUCT_PAYLOAD TO ROLE IDP_STREAMING_RL;
+GRANT OPERATE, MONITOR ON PIPE IDP_DEMO.STREAMING.PRODUCT_PAYLOAD_PIPE TO ROLE IDP_STREAMING_RL;
+
+ALTER WAREHOUSE IDP_IW_XS ADD TABLES (IDP_DEMO.STREAMING.PRODUCT_PAYLOAD);
+
+-- Serve the freshest state by default (LAST_DEDUP is faster but ~2-5 min behind)
+ALTER TABLE IDP_DEMO.STREAMING.PRODUCT_PAYLOAD
+  SET DEFAULT_INTERACTIVE_TABLE_SCAN_VERSION = LATEST_DEDUP;

@@ -1,0 +1,3 @@
+snowpipe-streaming==1.9.1
+boto3>=1.34
+snowflake-connector-python>=3.12

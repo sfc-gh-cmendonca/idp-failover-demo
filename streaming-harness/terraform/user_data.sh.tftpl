@@ -1,0 +1,82 @@
+#!/bin/bash
+set -euxo pipefail
+
+dnf install -y python3.11 python3.11-pip
+
+useradd --system --create-home --home-dir /opt/idp-harness idp || true
+mkdir -p /opt/idp-harness/app /opt/idp-harness/keys /opt/idp-harness/journal
+
+cat > /opt/idp-harness/app/producer.py <<'IDP_EOF'
+${producer_py}
+IDP_EOF
+cat > /opt/idp-harness/app/udm.py <<'IDP_EOF'
+${udm_py}
+IDP_EOF
+cat > /opt/idp-harness/app/journal.py <<'IDP_EOF'
+${journal_py}
+IDP_EOF
+cat > /opt/idp-harness/app/replay.py <<'IDP_EOF'
+${replay_py}
+IDP_EOF
+cat > /usr/local/bin/idp-demo-ctl <<'IDP_EOF'
+${idp_demo_ctl}
+IDP_EOF
+chmod 755 /usr/local/bin/idp-demo-ctl
+cat > /opt/idp-harness/app/requirements.txt <<'IDP_EOF'
+${requirements}
+IDP_EOF
+cat > /usr/local/bin/idp-target <<'IDP_EOF'
+${idp_target}
+IDP_EOF
+chmod 755 /usr/local/bin/idp-target
+
+python3.11 -m venv /opt/idp-harness/venv
+/opt/idp-harness/venv/bin/pip install --upgrade pip
+/opt/idp-harness/venv/bin/pip install -r /opt/idp-harness/app/requirements.txt
+chown -R idp:idp /opt/idp-harness
+chmod 700 /opt/idp-harness/keys
+
+cat > /etc/idp-harness.env <<'EOF'
+PRIVATE_KEY_PATH=/opt/idp-harness/keys/rsa_key.p8
+SF_TARGET=${sf_target}
+SF_ACCOUNT_PRIMARY=${sf_account}
+SF_ACCOUNT_SECONDARY=${sf_account_secondary}
+SF_USER=${sf_user}
+SF_ROLE=${sf_role}
+SF_DATABASE=${sf_database}
+SF_SCHEMA=${sf_schema}
+SF_PIPE=${sf_pipe}
+RATE_PER_SEC=${rate_per_sec}
+UNIVERSE_SIZE=${universe_size}
+CHANNELS=${channels}
+INSTANCE_ID=ec2
+JOURNAL_DIR=/opt/idp-harness/journal
+EOF
+chmod 640 /etc/idp-harness.env
+chgrp idp /etc/idp-harness.env
+
+cat > /etc/systemd/system/idp-harness.service <<'EOF'
+[Unit]
+Description=IDP product payload Snowpipe Streaming harness
+After=network-online.target
+Wants=network-online.target
+# Starts once the private key has been copied over SSH
+ConditionPathExists=/opt/idp-harness/keys/rsa_key.p8
+
+[Service]
+User=idp
+EnvironmentFile=/etc/idp-harness.env
+WorkingDirectory=/opt/idp-harness/app
+ExecStart=/opt/idp-harness/venv/bin/python producer.py
+Restart=on-failure
+RestartSec=10
+KillSignal=SIGTERM
+TimeoutStopSec=90
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+systemctl daemon-reload
+systemctl enable idp-harness
+touch /opt/idp-harness/.bootstrap-done
